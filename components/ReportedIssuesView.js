@@ -2,11 +2,64 @@ import React from 'react';
 import {db} from '../firebaseApp';
 import {getDocs, query, where, collection, onSnapshot, writeBatch, doc, updateDoc} from "firebase/firestore";
 import { useState, useEffect } from 'react';
+import DiffView from './DiffView';
+import cloneDeep from 'lodash/cloneDeep';
 
+
+function findHopDiffs(originalHopData, reportedIssueHopData){
+
+    let hopDiffs = [null, null, null, null, null, null, null];
+
+    let areThereDiffs = false;
+
+    for(let i=0; i<7; i++){
+
+        const oHop = originalHopData[i];
+        const eHop = reportedIssueHopData[i];
+
+
+
+        if(oHop != null){
+
+            if(eHop != null){
+
+                if(eHop.etRangeStr == oHop.etRangeStr){
+                    hopDiffs[i] = {"orig": oHop.etRangeStr, "new": "N/A"};
+                }
+                else {
+                    hopDiffs[i] = {"orig": oHop.etRangeStr, "new": eHop.etRangeStr};
+                    areThereDiffs = true;
+                }
+            } else {
+
+                if(oHop.etRangeStr == "closed"){
+                    hopDiffs[i] = {"orig": "Closed", "new": "N/A"};
+                } else {
+                    hopDiffs[i] = {"orig": oHop.etRangeStr, "new": "Closed"};
+                    areThereDiffs = true;
+                }
+            }
+        } else {
+
+            if(eHop != null){
+                hopDiffs[i] = {"orig": "Closed", "new": eHop.etRangeStr};
+                areThereDiffs = true;
+            } else {
+                hopDiffs[i] = {"orig": "Closed", "new": "N/A"};
+            }
+        }
+    }
+
+    return {areThereDiffs: areThereDiffs, hopDiffs: hopDiffs};
+
+}
 
 export default function ReportedIssuesView() {
 
     const [reportedIssues, setReportedIssues] = useState(null);
+    const [fullIssueData, setFullIssueData] = useState(null);
+    const [showingDiffView, setShowingDiffView] = useState(false);
+    const [diffLandmark, setDiffLandmark] = useState(null); 
 
     useEffect(() => {
 
@@ -49,7 +102,71 @@ export default function ReportedIssuesView() {
 
         return unsubscribe;
         
-    }, [])
+    }, []);
+
+
+
+    useEffect(() => {
+        
+        async function getLandmarkDocs(){
+
+            if(reportedIssues != null && reportedIssues.length > 0){
+
+                try {
+                    const landmarkIds = reportedIssues.map(issue => issue.landmark_id);
+
+
+                    if(landmarkIds == null || landmarkIds.length < 1){
+                        console.log("Unexpected error. Landmark ids is null or empty");
+                        return;
+                    }
+
+                    const landmarksRef = collection(db, "landmark_locations_data");
+            
+                    const q = query(landmarksRef, where("id", "in", landmarkIds));
+            
+                    const querySnapshot = await getDocs(q);
+    
+                    let fullIssues = cloneDeep(reportedIssues);
+
+                    let landmarkMap = new Map();
+
+                    querySnapshot.forEach((doc) => {
+                            landmarkMap.set(doc.id, doc.data());
+                        }
+                    );
+
+                    fullIssues = fullIssues.map(partialIssue => {
+                        return {
+                            ...landmarkMap.get(partialIssue.landmark_id),
+                            ...partialIssue
+                        };
+                    });
+
+                    fullIssues = fullIssues.map(issue => {
+
+                        const {areThereDiffs, hopDiffs} = findHopDiffs(issue.hopData.flattenedHopDataForFilteringAndMutating, issue.edited_hop_data.flattenedHopDataForFilteringAndMutating)
+
+                        return {
+                            ...issue,
+                            hopDiffs: hopDiffs,
+                            wasHoursEdited: areThereDiffs
+                        };
+                    });
+
+                    console.log("setting full issue data");
+                    setFullIssueData(fullIssues);
+                    
+                } catch(error){
+                    console.log(error);
+                }
+            }
+        }
+
+        getLandmarkDocs();
+        
+        
+    }, [reportedIssues]);
 
     const handleAccept = async (reportedIssue) => {
 
@@ -113,8 +230,9 @@ export default function ReportedIssuesView() {
         }
     }
 
-    const showDiff = (id) => {
-        console.log("showing diff of: ", id);
+    const showDiff = (reportedIssue) => {
+        setDiffLandmark(reportedIssue);
+        setShowingDiffView(true);
     }
 
     const dummyData = [
@@ -136,8 +254,11 @@ export default function ReportedIssuesView() {
 
 
     return (
-        <div>
-            <div className="container">
+
+        <>
+        {!showingDiffView ? 
+            <div>
+                <div className="container">
                 <div className="row">
                     <div className="col-12">
                         <table className="table table-bordered">
@@ -152,7 +273,7 @@ export default function ReportedIssuesView() {
                             </thead>
                             <tbody>
 
-                                {reportedIssues && reportedIssues.length > 0 ? reportedIssues.map(reportedIssue => (
+                                {fullIssueData && fullIssueData.length > 0 ? fullIssueData.map(reportedIssue => (
                                     <tr key={reportedIssue.landmark_id}>
                                         {/* <th scope="row">1</th> */}
                                         <td>{reportedIssue.bathroomName}</td>
@@ -162,7 +283,7 @@ export default function ReportedIssuesView() {
                                         <td>
                                             <button type="button" className="btn btn-link action-btn-accept" onClick={() => handleAccept(reportedIssue)}><i className="bi bi-check-lg"></i></button>
                                             <button type="button" className="btn btn-link action-btn-reject" onClick={() => handleReject(reportedIssue)}><i className="bi bi-x-lg"></i></button>
-                                            <button type="button" className="btn btn-link action-btn-diff" onClick={() => showDiff(reportedIssue.landmark_id)}><i className="bi bi-file-diff"></i></button>
+                                            <button type="button" className="btn btn-link action-btn-diff" onClick={() => showDiff(reportedIssue)}><i className="bi bi-file-diff"></i></button>
                                         </td>
                                     </tr>
                                 )) : 
@@ -175,6 +296,9 @@ export default function ReportedIssuesView() {
                     </div>
                 </div>
                 </div>
-        </div>
+            </div> : <DiffView setShowingDiffView={setShowingDiffView} diffLandmark={diffLandmark} />
+        }
+        </>
+        
     )
 }
