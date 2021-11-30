@@ -148,7 +148,7 @@ export default function DiffView({setShowingDiffView, diffLandmark}) {
                                             <tbody>
                                                     <tr>
                                                         <td>{fullLandmarkData.building}</td>
-                                                        <td>{fullLandmarkData.edited_bathroom_name}</td>
+                                                        <td>{fullLandmarkData.edited_bathroom_name || "N/A"}</td>
                                                     </tr>
                                             </tbody>
                                         </table>
